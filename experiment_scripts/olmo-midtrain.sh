@@ -1,15 +1,15 @@
 #!/bin/bash
 
 #SBATCH -c 64                          # Number of CPU cores
-#SBATCH -t 3-0:00                     # Runtime (48 hours for 7B tokens)
-#SBATCH -p kempner_h100                # Partition to submit to
+#SBATCH -t 1-0:00                     # Runtime (48 hours for 7B tokens)
+#SBATCH -p gpu_h200                # Partition to submit to
 #SBATCH --mem=250G                      # Memory
 #SBATCH -n 1                            # Number of nodes
 #SBATCH --gres=gpu:4                   # Number of GPUs (increase if needed)
 #SBATCH -o ../slurm_out/midtrain-%j.out # Standard out
 #SBATCH -e ../slurm_out/midtrain-%j.out # Standard err
-#SBATCH --account=kempner_dam_lab
-#SBATCH --job-name=olmo-midtrain
+#SBATCH --account=barak_lab
+#SBATCH --job-nam=mid-1-lr
 
 module purge
 module load Mambaforge
@@ -27,4 +27,4 @@ echo ""
 cd ../
 
 export CACHED_PATH_CACHE_ROOT=/n/netscratch/dam_lab/Lab/sqin/olmo/
-torchrun --nproc_per_node=4 /n/home05/sqin/OLMo/scripts/train.py experiment_scripts/OLMo2-7B-stage2-400k.yaml
+torchrun --nproc_per_node=4 /n/home05/sqin/OLMo/scripts/train.py /n/home05/sqin/OLMo/experiment_scripts/OLMo2-7B-stage2-100k-prelr.yaml

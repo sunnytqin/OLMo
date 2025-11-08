@@ -75,11 +75,11 @@ save_folder: /n/netscratch/dam_lab/Lab/sqin/olmo/checkpoints/${run_name}
 save_overwrite: true
 
 save_interval: 500
-save_interval_ephemeral: 100
+save_interval_ephemeral: 250
 save_num_checkpoints_to_keep: 0
 sharded_checkpointer: olmo_core
 
-save_interval_unsharded: 1000
+save_interval_unsharded: 2000
 save_num_unsharded_checkpoints_to_keep: -1
 
 load_path: null
@@ -111,7 +111,7 @@ speed_monitor:
 
 gen1_gc_interval: 10
 
-eval_interval: 100
+eval_interval: 500
 eval_subset_num_batches: -1
 device_eval_batch_size: ${device_train_microbatch_size}
 evaluators:

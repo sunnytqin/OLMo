@@ -1,6 +1,7 @@
 """Utility functions for counting tokens and managing data shards.
 
-Target Data Mix for 20B Token Training (Balanced Pretrain Mix for 1B Model):
+=============================================================================
+PRETRAINING DATA MIX (20B Tokens - Balanced Mix for 1B Model)
 =============================================================================
 
 MATH (non-GSM) - Keep All (~3.67 BT = 18.4%):
@@ -24,14 +25,30 @@ SCIENTIFIC/ACADEMIC - Target 3.0 BT (~15%):
 INSTRUCTION/REASONING - Target 2.33 BT (~11.6%):
 - tulu_flan → 8.54 BT → 2.33 BT (27.3% retention)
 
-EXCLUDED (GSM-related):
+EXCLUDED FROM PRETRAINING (GSM-related):
 - gsm8k (all variants)
 - gsm8k-synth
 - gsm_MIND
 - tinyGSM (all variants)
 
-Total Target: ~20 BT
+Total Pretraining: ~20 BT
 Breakdown: 18.4% Math, 55% General/Web, 15% Scientific, 11.6% Instruction
+
+=============================================================================
+SFT DATA MIX (20.88M Tokens - GSM8K-focused)
+=============================================================================
+
+GSM8K DATASETS (excluded from pretraining, used for SFT):
+- gsm_MIND/clean_stop → 17.06 MT (81.7%) - 92 shards
+- gsm8k/v0_socratic_train → 1.51 MT (7.3%) - 1 shard
+- gsm8k/v0_main_train → 1.23 MT (5.9%) - 1 shard
+- gsm8k-synth/resample_v1_6x → 1.08 MT (5.2%) - 1 shard
+
+Total SFT Dataset: 20.88 MT (95 shards)
+
+EXCLUDED FROM SFT (too large):
+- tinyGSM/mind → 3.06 BT
+- tinyGSM/mind-2students → 3.41 BT
 """
 
 import numpy as np
@@ -289,6 +306,73 @@ def build_data_mix(base_dir: str = "/n/netscratch/dam_lab/Lab/sqin/olmo/stage2/p
     return all_selected_shards
 
 
+def build_gsm8k_sft_mix(base_dir: str = "/n/netscratch/dam_lab/Lab/sqin/olmo/stage2/preprocessed",
+                        dtype=np.uint32) -> List[str]:
+    """
+    Build GSM8K SFT data mix (excludes large tinyGSM datasets).
+
+    Includes:
+    - gsm8k/v0_main_train (1.23M tokens)
+    - gsm8k/v0_socratic_train (1.51M tokens)
+    - gsm8k-synth/resample_v1_6x (1.08M tokens)
+    - gsm_MIND/clean_stop (17.06M tokens)
+
+    Total: ~20.88M tokens across 95 shards
+
+    Returns:
+        List of all GSM8K shard paths
+    """
+
+    # Define GSM8K sources (small datasets only, excluding tinyGSM)
+    gsm_sources = [
+        ("gsm8k/v0_main_train/allenai", "dolma2-tokenizer"),
+        ("gsm8k/v0_socratic_train/allenai", "dolma2-tokenizer"),
+        ("gsm8k-synth/resample_v1_6x", "dolma2-tokenizer"),
+        ("gsm_MIND/clean_stop", "dolma2-tokenizer"),
+    ]
+
+    all_shards = []
+    results = []
+
+    print("Building GSM8K SFT Data Mix...")
+    print("=" * 80)
+    print()
+
+    for source_name, tokenizer in gsm_sources:
+        try:
+            shards = get_local_shards(source_name, base_dir, tokenizer)
+            tokens = count_tokens(shards, dtype)
+
+            all_shards.extend(shards)
+            results.append((source_name, tokens, len(shards)))
+
+            print(f"✓ {source_name}")
+            print(f"  Tokens: {tokens/1e6:.2f}M | Shards: {len(shards)}")
+            print()
+
+        except Exception as e:
+            print(f"✗ {source_name}: ERROR - {e}")
+            print()
+
+    # Print summary
+    total_tokens = sum(r[1] for r in results)
+    total_shards = sum(r[2] for r in results)
+
+    print("=" * 80)
+    print("GSM8K SFT DATA SUMMARY:")
+    print("=" * 80)
+    for source_name, tokens, num_shards in results:
+        pct = (tokens / total_tokens * 100) if total_tokens > 0 else 0
+        print(f"{source_name:60s} | {tokens/1e6:6.2f}M ({pct:5.1f}%) | {num_shards:4d} shards")
+
+    print("-" * 80)
+    print(f"{'TOTAL':60s} | {total_tokens/1e6:6.2f}M tokens | {total_shards:4d} shards")
+    print("=" * 80)
+    print()
+
+    return all_shards
+
+
 def local_to_remote_path(local_path: str,
                         local_base: str = "/n/netscratch/dam_lab/Lab/sqin/olmo/stage2/preprocessed",
                         remote_base: str = "http://olmo-data.org/preprocessed") -> str:
@@ -383,6 +467,98 @@ def build_and_write_config(yaml_path: str = "/n/home05/sqin/OLMo/experiment_scri
     print(f"✓ Configuration complete!")
     print(f"  Config file: {yaml_path}")
     print(f"  Total shards: {len(shard_paths)}")
+
+
+def write_gsm8k_sft_config(yaml_path: str = "/n/home05/sqin/OLMo/experiment_scripts/OLMo2-1B-sft.yaml",
+                          base_dir: str = "/n/netscratch/dam_lab/Lab/sqin/olmo/stage2/preprocessed",
+                          dtype=np.uint32,
+                          num_epochs: int = 3,
+                          global_batch_size: int = 128) -> None:
+    """
+    Build GSM8K SFT data mix and write to the SFT YAML config file.
+
+    Args:
+        yaml_path: Path to the SFT YAML config file to update
+        base_dir: Base directory where preprocessed data is stored
+        dtype: The numpy dtype of the memmap (default: np.uint32)
+        num_epochs: Number of epochs to train (default: 3)
+        global_batch_size: Global training batch size (default: 128)
+    """
+    print("=" * 80)
+    print("CONFIGURING GSM8K SFT TRAINING")
+    print("=" * 80)
+    print()
+
+    # Build the GSM8K data mix
+    shard_paths = build_gsm8k_sft_mix(base_dir, dtype)
+
+    # Calculate total tokens in dataset
+    dataset_tokens = count_tokens(shard_paths, dtype)
+    print(f"Dataset size: {dataset_tokens:,} tokens ({dataset_tokens/1e6:.2f}M)")
+    print()
+
+    # Calculate training parameters
+    max_sequence_length = 4096
+    tokens_per_step = global_batch_size * max_sequence_length
+    steps_per_epoch = dataset_tokens / tokens_per_step
+    total_steps = int(steps_per_epoch * num_epochs)
+    total_training_tokens = dataset_tokens * num_epochs
+
+    # Calculate warmup (5% of total training)
+    warmup_tokens = int(total_training_tokens * 0.05)
+
+    # Calculate evaluation and save intervals
+    eval_interval = max(1, int(steps_per_epoch / 4))  # ~4 times per epoch
+    save_interval = eval_interval
+    save_interval_ephemeral = max(1, save_interval // 2)
+
+    print("=" * 80)
+    print("TRAINING CONFIGURATION:")
+    print("=" * 80)
+    print(f"Number of epochs:              {num_epochs}")
+    print(f"Global batch size:             {global_batch_size}")
+    print(f"Tokens per step:               {tokens_per_step:,}")
+    print(f"Steps per epoch:               {steps_per_epoch:.1f}")
+    print(f"Total training steps:          {total_steps}")
+    print(f"Total training tokens:         {total_training_tokens:,} ({total_training_tokens/1e6:.2f}M)")
+    print(f"Warmup tokens (5%):            {warmup_tokens:,} ({warmup_tokens/1e6:.2f}M)")
+    print(f"Evaluation interval:           every {eval_interval} steps")
+    print(f"Save interval:                 every {save_interval} steps")
+    print("=" * 80)
+    print()
+
+    # Load the existing YAML config
+    with open(yaml_path, 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Update the configuration
+    if 'data' not in config:
+        config['data'] = {}
+
+    config['data']['paths'] = shard_paths
+    config['global_train_batch_size'] = global_batch_size
+    config['max_duration'] = f"{total_training_tokens:.0f}T"
+    config['stop_at'] = total_steps
+    config['eval_interval'] = eval_interval
+    config['save_interval'] = save_interval
+    config['save_interval_ephemeral'] = save_interval_ephemeral
+
+    if 'scheduler' not in config:
+        config['scheduler'] = {}
+
+    config['scheduler']['t_max'] = float(total_training_tokens)
+    config['scheduler']['t_warmup'] = float(warmup_tokens)
+
+    # Write back to the YAML file
+    with open(yaml_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, width=1000)
+
+    print("✓ Updated configuration file")
+    print(f"  Config: {yaml_path}")
+    print(f"  Data shards: {len(shard_paths)}")
+    print(f"  Training: {num_epochs} epochs × {dataset_tokens/1e6:.2f}M tokens = {total_training_tokens/1e6:.2f}M total")
+    print(f"  Steps: {total_steps} steps ({steps_per_epoch:.1f} steps/epoch)")
+    print()
 
 
 if __name__ == "__main__":

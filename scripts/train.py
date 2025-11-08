@@ -111,16 +111,34 @@ def main(cfg: TrainConfig) -> None:
 
     # Maybe start W&B run.
     if cfg.wandb is not None and (get_global_rank() == 0 or not cfg.wandb.rank_zero_only):
+        import os
+
         wandb_dir = Path(cfg.save_folder) / "wandb"
         wandb_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get SLURM job ID and restart count from environment
+        slurm_job_id = os.environ.get("SLURM_JOB_ID", "unknown")
+        restart_count = int(os.environ.get("SLURM_RESTART_COUNT", 0))
+
+        # Add SLURM info to wandb config
+        wandb_config = cfg.asdict(exclude=["wandb"])
+        wandb_config["slurm_job_id"] = slurm_job_id
+        wandb_config["slurm_restart_count"] = restart_count
+
+        # Add SLURM job ID to tags for easy filtering
+        wandb_tags = list(cfg.wandb.tags) if cfg.wandb.tags else []
+        wandb_tags.append(f"job-{slurm_job_id}")
+        if restart_count > 0:
+            wandb_tags.append(f"restart-{restart_count}")
+
         wandb.init(
             dir=str(wandb_dir),
             project=cfg.wandb.project,
             entity=cfg.wandb.entity,
             group=cfg.wandb.group,
             name=cfg.wandb.name,
-            tags=cfg.wandb.tags,
-            config=cfg.asdict(exclude=["wandb"]),
+            tags=wandb_tags,
+            config=wandb_config,
         )
 
     barrier()

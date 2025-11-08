@@ -407,9 +407,14 @@ class Trainer:
 
         # Reset learning rate and weight decay to the values from the config, not the checkpoint.
         log.info("Resetting learning rate...")
+        log.info(f"Scheduler current position: {self.scheduler_current:,} {self.cfg.scheduler.units}")
+        log.info(f"Scheduler max: {self.scheduler_max:,} {self.cfg.scheduler.units}")
+        log.info(f"Global step: {self.global_step:,}")
+        log.info(f"Global train tokens seen: {self.global_train_tokens_seen:,}")
         new_learning_rate = self.scheduler.get_lr(
             self.cfg.optimizer.learning_rate, self.scheduler_current, self.scheduler_max
         )
+        log.info(f"Computed learning rate: {new_learning_rate:.6e} (base LR: {self.cfg.optimizer.learning_rate:.6e})")
         for group in self.optim.param_groups:
             group["lr"] = new_learning_rate
             group["initial_lr"] = self.cfg.optimizer.learning_rate
@@ -495,15 +500,28 @@ class Trainer:
         if link_latest:
             # Link to 'latest'.
             latest_path = Path(self.cfg.save_folder) / f"latest{suffix}"
-            latest_path.unlink(missing_ok=True)
+            # Use a temporary symlink name to avoid race conditions
+            temp_latest = Path(self.cfg.save_folder) / f".latest{suffix}.tmp.{get_global_rank()}"
+
             try:
-                latest_path.symlink_to(checkpoint_dir.name, target_is_directory=True)
+                # Create symlink with temporary name
+                temp_latest.unlink(missing_ok=True)
+                temp_latest.symlink_to(checkpoint_dir.name, target_is_directory=True)
+
+                # Atomically move it to the final location
+                temp_latest.replace(latest_path)
             except FileExistsError:
+                # Clean up temp file and verify the existing symlink is correct
+                temp_latest.unlink(missing_ok=True)
                 # Same as above, caught when another (file-system) local rank 0 has already made the 'latest' symlink.
                 # This can happen when nodes are saving to a common NFS drive but otherwise have distinct
                 # file-systems.
-                if latest_path.resolve().name != checkpoint_dir.name:
+                if latest_path.exists() and latest_path.resolve().name != checkpoint_dir.name:
                     raise
+            except Exception:
+                # Clean up temp file on any error
+                temp_latest.unlink(missing_ok=True)
+                raise
 
         # Remove old checkpoints.
         # For DDP, checkpoint_type being passed to remove_checkpoint is always `unsharded`.

@@ -5,7 +5,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Load model and tokenizer
-MODEL_PATH = "/n/netscratch/dam_lab/Lab/sqin/olmo/checkpoints/OLMo2-7B-stage2-100k/step500-unsharded-hf"
+MODEL_PATH = "/n/netscratch/dam_lab/Lab/sqin/olmo/checkpoints/OLMo2-1B-stage1/step7000-hf"
 print(f"Loading model from {MODEL_PATH}...")
 model = AutoModelForCausalLM.from_pretrained(MODEL_PATH, torch_dtype=torch.bfloat16, device_map="auto")
 # Use the official OLMo-2 tokenizer
